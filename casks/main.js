@@ -612,53 +612,47 @@ function isLegacyEdgeCompatibilityMode() {
   return major > 0 && major <= 95;
 }
 
-function readBlobAsTextCompat(blob) {
-  return new Promise(function(resolve, reject) {
-    if (!blob) {
-      reject({ name: 'ReadError' });
-      return;
-    }
+function readBlobAsTextWithFileReader(blob, onSuccess, onError) {
+  if (!window.FileReader) {
+    onError({ name: 'ReadError' });
+    return;
+  }
 
-    if (typeof blob.text === 'function') {
-      blob.text().then(resolve, function() {
-        if (!window.FileReader) {
-          reject({ name: 'ReadError' });
-          return;
-        }
-        try {
-          var reader = new FileReader();
-          reader.onload = function() {
-            resolve(String(reader.result || ''));
-          };
-          reader.onerror = function() {
-            reject({ name: 'ReadError' });
-          };
-          reader.readAsText(blob);
-        } catch (e) {
-          reject({ name: 'ReadError' });
-        }
+  try {
+    var reader = new FileReader();
+    reader.onload = function() {
+      onSuccess(String(reader.result || ''));
+    };
+    reader.onerror = function() {
+      onError({ name: 'ReadError' });
+    };
+    reader.readAsText(blob);
+  } catch (e) {
+    onError({ name: 'ReadError' });
+  }
+}
+
+function readBlobAsTextCompat(blob, onSuccess, onError) {
+  if (!blob) {
+    onError({ name: 'ReadError' });
+    return;
+  }
+
+  if (typeof blob.text === 'function') {
+    try {
+      blob.text().then(function(text) {
+        onSuccess(String(text || ''));
+      }, function() {
+        readBlobAsTextWithFileReader(blob, onSuccess, onError);
       });
       return;
-    }
-
-    if (!window.FileReader) {
-      reject({ name: 'ReadError' });
+    } catch (e) {
+      readBlobAsTextWithFileReader(blob, onSuccess, onError);
       return;
     }
+  }
 
-    try {
-      var reader2 = new FileReader();
-      reader2.onload = function() {
-        resolve(String(reader2.result || ''));
-      };
-      reader2.onerror = function() {
-        reject({ name: 'ReadError' });
-      };
-      reader2.readAsText(blob);
-    } catch (e2) {
-      reject({ name: 'ReadError' });
-    }
-  });
+  readBlobAsTextWithFileReader(blob, onSuccess, onError);
 }
 
 // -------------------- 自動解析イベント --------------------
@@ -717,6 +711,17 @@ function readBlobAsTextCompat(blob) {
   function saveDataByDownload(jsonText) {
     var fileName = buildSaveFileName();
     var blob = new Blob([jsonText], { type: 'application/json' });
+    if (window.navigator && typeof window.navigator.msSaveOrOpenBlob === 'function') {
+      window.navigator.msSaveOrOpenBlob(blob, fileName);
+      return;
+    }
+    if (window.navigator && typeof window.navigator.msSaveBlob === 'function') {
+      window.navigator.msSaveBlob(blob, fileName);
+      return;
+    }
+    if (!window.URL || typeof window.URL.createObjectURL !== 'function') {
+      throw { name: 'NotSupportedError' };
+    }
     var url = URL.createObjectURL(blob);
     var link = document.createElement('a');
     link.href = url;
@@ -783,59 +788,66 @@ function readBlobAsTextCompat(blob) {
     return datePart + '_' + vendorPart + '_' + itemPart + '_' + countPart + '.json';
   }
 
-  function openDataByFileInput() {
-    return new Promise(function(resolve, reject) {
-      var input = document.createElement('input');
-      input.type = 'file';
-      input.accept = '.json,application/json';
-      input.onchange = function() {
-        var file = input.files && input.files[0] ? input.files[0] : null;
-        if (!file) {
-          reject({ name: 'AbortError' });
-          return;
+  function openDataByFileInput(onSuccess, onError) {
+    var input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json,application/json';
+    input.onchange = function() {
+      var file = input.files && input.files[0] ? input.files[0] : null;
+      if (!file) {
+        onError({ name: 'AbortError' });
+        return;
+      }
+      readBlobAsTextWithFileReader(file, function(text) {
+        try {
+          onSuccess(JSON.parse(text));
+        } catch (e) {
+          onError({ name: 'SyntaxError' });
         }
-        var reader = new FileReader();
-        reader.onload = function() {
-          try {
-            var data = JSON.parse(String(reader.result || ''));
-            resolve(data);
-          } catch (e) {
-            reject({ name: 'SyntaxError' });
-          }
-        };
-        reader.onerror = function() {
-          reject({ name: 'ReadError' });
-        };
-        reader.readAsText(file);
-      };
-      input.click();
-    });
+      }, onError);
+    };
+    input.click();
   }
 
-  async function pickDirectoryHandle(mode) {
+  function pickDirectoryHandle(mode, onSuccess, onError) {
     if (!canUseDirectoryPicker()) {
-      throw { name: 'NotSupportedError' };
+      onError({ name: 'NotSupportedError' });
+      return;
     }
+
     try {
-      return await window.showDirectoryPicker({
+      window.showDirectoryPicker({
         id: 'ledger-local-data',
         mode: mode || 'readwrite',
         startIn: 'documents'
+      }).then(function(handle) {
+        onSuccess(handle);
+      }, function(err) {
+        if (err && err.name === 'TypeError') {
+          try {
+            window.showDirectoryPicker().then(function(handle) {
+              onSuccess(handle);
+            }, onError);
+          } catch (fallbackError) {
+            onError(fallbackError);
+          }
+          return;
+        }
+        onError(err);
       });
     } catch (err) {
-      if (err && err.name === 'TypeError') {
-        return await window.showDirectoryPicker();
-      }
-      throw err;
+      onError(err);
     }
   }
 
-  async function openJsonDataWithPickerCompat() {
+  function openJsonDataWithPickerCompat(onSuccess, onError) {
     if (!canUseOpenFilePicker()) {
-      return await openDataByFileInput();
+      openDataByFileInput(onSuccess, onError);
+      return;
     }
+
     try {
-      var fileHandles = await window.showOpenFilePicker({
+      window.showOpenFilePicker({
         id: 'ledger-local-open',
         multiple: false,
         startIn: 'documents',
@@ -845,31 +857,72 @@ function readBlobAsTextCompat(blob) {
             accept: { 'application/json': ['.json'] }
           }
         ]
-      });
-      var fileHandle = fileHandles && fileHandles[0] ? fileHandles[0] : null;
-      if (!fileHandle) {
-        throw { name: 'AbortError' };
-      }
-      var file = await fileHandle.getFile();
-      var text = await readBlobAsTextCompat(file);
-      return JSON.parse(text);
-    } catch (err) {
-      if (err && err.name === 'TypeError') {
-        try {
-          var fallbackHandles = await window.showOpenFilePicker();
-          var fallbackHandle = fallbackHandles && fallbackHandles[0] ? fallbackHandles[0] : null;
-          if (!fallbackHandle) {
-            throw { name: 'AbortError' };
-          }
-          var fallbackFile = await fallbackHandle.getFile();
-          var fallbackText = await readBlobAsTextCompat(fallbackFile);
-          return JSON.parse(fallbackText);
-        } catch (e) {
-          return await openDataByFileInput();
+      }).then(function(fileHandles) {
+        var fileHandle = fileHandles && fileHandles[0] ? fileHandles[0] : null;
+        if (!fileHandle) {
+          onError({ name: 'AbortError' });
+          return;
         }
-      }
-      throw err;
+        fileHandle.getFile().then(function(file) {
+          readBlobAsTextCompat(file, function(text) {
+            try {
+              onSuccess(JSON.parse(text));
+            } catch (e) {
+              onError({ name: 'SyntaxError' });
+            }
+          }, onError);
+        }, onError);
+      }, function(err) {
+        if (err && err.name === 'TypeError') {
+          try {
+            window.showOpenFilePicker().then(function(fallbackHandles) {
+              var fallbackHandle = fallbackHandles && fallbackHandles[0] ? fallbackHandles[0] : null;
+              if (!fallbackHandle) {
+                onError({ name: 'AbortError' });
+                return;
+              }
+              fallbackHandle.getFile().then(function(fallbackFile) {
+                readBlobAsTextCompat(fallbackFile, function(fallbackText) {
+                  try {
+                    onSuccess(JSON.parse(fallbackText));
+                  } catch (e) {
+                    onError({ name: 'SyntaxError' });
+                  }
+                }, function() {
+                  openDataByFileInput(onSuccess, onError);
+                });
+              }, function() {
+                openDataByFileInput(onSuccess, onError);
+              });
+            }, function() {
+              openDataByFileInput(onSuccess, onError);
+            });
+          } catch (fallbackError) {
+            openDataByFileInput(onSuccess, onError);
+          }
+          return;
+        }
+        onError(err);
+      });
+    } catch (err) {
+      onError(err);
     }
+  }
+
+  function handleOpenError(err) {
+    if (err && err.name === 'AbortError') {
+      setStatusMessage('読み込みをキャンセルしました。');
+      return;
+    }
+    if (err && err.name === 'NotFoundError') {
+      setStatusMessage('ファイルが見つかりません。');
+      return;
+    }
+    if (err && err.name === 'SyntaxError') {
+      setStatusMessage('JSONの形式が不正です。');
+      return;
+    }
+    setStatusMessage('読み込みに失敗しました。');
   }
 
   function createLocalSaveData() {
@@ -1013,108 +1066,148 @@ function readBlobAsTextCompat(blob) {
   lastAllDataText = '';
 };
 
-  btnSaveLocal.onclick = async function() {
-    try {
-      var data = createLocalSaveData();
-      var jsonText = JSON.stringify(data, null, 2);
-      var fileName = buildSaveFileName();
+  btnSaveLocal.onclick = function() {
+    var data = createLocalSaveData();
+    var jsonText = JSON.stringify(data, null, 2);
+    var fileName = buildSaveFileName();
 
-      if (isFileProtocolPage() || !canUseDirectoryPicker()) {
+    function fallbackSave(messagePrefix) {
+      try {
         saveDataByDownload(jsonText);
-        setStatusMessage('JSONファイルとして保存しました（' + fileName + '）。');
-        return;
+        setStatusMessage(messagePrefix + '（' + fileName + '）。');
+      } catch (e) {
+        setStatusMessage('保存に失敗しました。');
       }
+    }
 
-      var dirHandle = await pickDirectoryHandle('readwrite');
-      var fileHandle = await dirHandle.getFileHandle(fileName, { create: true });
-      var writable = await fileHandle.createWritable();
-      await writable.write(jsonText);
-      await writable.close();
-      setStatusMessage('データを保存しました（' + fileName + '）。');
-    } catch (err) {
+    if (isFileProtocolPage() || !canUseDirectoryPicker()) {
+      fallbackSave('JSONファイルとして保存しました');
+      return;
+    }
+
+    pickDirectoryHandle('readwrite', function(dirHandle) {
+      dirHandle.getFileHandle(fileName, { create: true }).then(function(fileHandle) {
+        fileHandle.createWritable().then(function(writable) {
+          writable.write(jsonText).then(function() {
+            writable.close().then(function() {
+              setStatusMessage('データを保存しました（' + fileName + '）。');
+            }, function(err) {
+              if (err && err.name === 'AbortError') {
+                setStatusMessage('保存をキャンセルしました。');
+                return;
+              }
+              fallbackSave('フォルダ保存できないため、JSONファイル保存に切り替えました');
+            });
+          }, function(err) {
+            if (err && err.name === 'AbortError') {
+              setStatusMessage('保存をキャンセルしました。');
+              return;
+            }
+            fallbackSave('フォルダ保存できないため、JSONファイル保存に切り替えました');
+          });
+        }, function(err) {
+          if (err && err.name === 'AbortError') {
+            setStatusMessage('保存をキャンセルしました。');
+            return;
+          }
+          fallbackSave('フォルダ保存できないため、JSONファイル保存に切り替えました');
+        });
+      }, function(err) {
+        if (err && err.name === 'AbortError') {
+          setStatusMessage('保存をキャンセルしました。');
+          return;
+        }
+        fallbackSave('フォルダ保存できないため、JSONファイル保存に切り替えました');
+      });
+    }, function(err) {
       if (err && err.name === 'AbortError') {
         setStatusMessage('保存をキャンセルしました。');
         return;
       }
-      if (err && (err.name === 'SecurityError' || err.name === 'NotAllowedError' || err.name === 'InvalidStateError' || err.name === 'TypeError' || err.name === 'NotSupportedError')) {
-        try {
-          var fallbackData = createLocalSaveData();
-          var fallbackJson = JSON.stringify(fallbackData, null, 2);
-          var fallbackName = buildSaveFileName();
-          saveDataByDownload(fallbackJson);
-          setStatusMessage('フォルダ保存できないため、JSONファイル保存に切り替えました（' + fallbackName + '）。');
-          return;
-        } catch (e) {
-          // フォールバック失敗時は下の共通メッセージ
-        }
-      }
-      setStatusMessage('保存に失敗しました。');
-    }
+      fallbackSave('フォルダ保存できないため、JSONファイル保存に切り替えました');
+    });
   };
 
-  btnOpenLocal.onclick = async function() {
-    try {
-      var data;
-
-      if (isFileProtocolPage()) {
-        data = await openDataByFileInput();
-      } else {
-        if (canUseOpenFilePicker()) {
-          data = await openJsonDataWithPickerCompat();
-        } else if (canUseDirectoryPicker()) {
-          var dirHandle = await pickDirectoryHandle('read');
-          var dirFileHandle = await dirHandle.getFileHandle(LOCAL_DATA_FILE_NAME);
-          var dirFile = await dirFileHandle.getFile();
-          var dirText = await readBlobAsTextCompat(dirFile);
-          data = JSON.parse(dirText);
-        } else {
-          data = await openDataByFileInput();
-        }
-      }
-
+  btnOpenLocal.onclick = function() {
+    function handleLoadedData(data, loadedLabel) {
       if (!data || data.format !== 'ledger-local-save-v1') {
         setStatusMessage('読み込んだデータ形式が不正です。');
         return;
       }
-
       applyLocalSaveData(data);
-      setStatusMessage('データを読み込みました（' + LOCAL_DATA_FILE_NAME + '）。');
-    } catch (err) {
-      if (err && err.name === 'AbortError') {
-        setStatusMessage('読み込みをキャンセルしました。');
-        return;
-      }
-      if (err && err.name === 'NotFoundError') {
-        setStatusMessage('ファイルが見つかりません。');
-        return;
-      }
-      if (err && err.name === 'SyntaxError') {
-        setStatusMessage('JSONの形式が不正です。');
-        return;
-      }
-      if (err && (err.name === 'SecurityError' || err.name === 'NotAllowedError' || err.name === 'InvalidStateError' || err.name === 'TypeError' || err.name === 'NotSupportedError')) {
-        try {
-          var fallbackLoaded = await openDataByFileInput();
-          if (!fallbackLoaded || fallbackLoaded.format !== 'ledger-local-save-v1') {
-            setStatusMessage('読み込んだデータ形式が不正です。');
-            return;
-          }
-          applyLocalSaveData(fallbackLoaded);
-          setStatusMessage('フォルダ読込できないため、JSONファイル読込に切り替えました。');
-          return;
-        } catch (e) {
-          if (e && e.name === 'AbortError') {
-            setStatusMessage('読み込みをキャンセルしました。');
-            return;
-          }
-          if (e && e.name === 'SyntaxError') {
-            setStatusMessage('JSONの形式が不正です。');
-            return;
-          }
-        }
-      }
-      setStatusMessage('読み込みに失敗しました。');
+      setStatusMessage(loadedLabel);
     }
+
+    function openFallbackFile(reasonLabel) {
+      openDataByFileInput(function(fallbackLoaded) {
+        handleLoadedData(fallbackLoaded, reasonLabel);
+      }, handleOpenError);
+    }
+
+    if (isFileProtocolPage()) {
+      openDataByFileInput(function(data) {
+        handleLoadedData(data, 'データを読み込みました（' + LOCAL_DATA_FILE_NAME + '）。');
+      }, handleOpenError);
+      return;
+    }
+
+    if (canUseOpenFilePicker()) {
+      openJsonDataWithPickerCompat(function(data) {
+        handleLoadedData(data, 'データを読み込みました（' + LOCAL_DATA_FILE_NAME + '）。');
+      }, function(err) {
+        if (err && (err.name === 'SecurityError' || err.name === 'NotAllowedError' || err.name === 'InvalidStateError' || err.name === 'TypeError' || err.name === 'NotSupportedError')) {
+          openFallbackFile('フォルダ読込できないため、JSONファイル読込に切り替えました。');
+          return;
+        }
+        handleOpenError(err);
+      });
+      return;
+    }
+
+    if (canUseDirectoryPicker()) {
+      pickDirectoryHandle('read', function(dirHandle) {
+        dirHandle.getFileHandle(LOCAL_DATA_FILE_NAME).then(function(dirFileHandle) {
+          dirFileHandle.getFile().then(function(dirFile) {
+            readBlobAsTextCompat(dirFile, function(dirText) {
+              try {
+                handleLoadedData(JSON.parse(dirText), 'データを読み込みました（' + LOCAL_DATA_FILE_NAME + '）。');
+              } catch (e) {
+                handleOpenError({ name: 'SyntaxError' });
+              }
+            }, function(err) {
+              if (err && (err.name === 'SecurityError' || err.name === 'NotAllowedError' || err.name === 'InvalidStateError' || err.name === 'TypeError' || err.name === 'NotSupportedError' || err.name === 'ReadError')) {
+                openFallbackFile('フォルダ読込できないため、JSONファイル読込に切り替えました。');
+                return;
+              }
+              handleOpenError(err);
+            });
+          }, function(err) {
+            if (err && (err.name === 'SecurityError' || err.name === 'NotAllowedError' || err.name === 'InvalidStateError' || err.name === 'TypeError' || err.name === 'NotSupportedError')) {
+              openFallbackFile('フォルダ読込できないため、JSONファイル読込に切り替えました。');
+              return;
+            }
+            handleOpenError(err);
+          });
+        }, function(err) {
+          if (err && (err.name === 'SecurityError' || err.name === 'NotAllowedError' || err.name === 'InvalidStateError' || err.name === 'TypeError' || err.name === 'NotSupportedError')) {
+            openFallbackFile('フォルダ読込できないため、JSONファイル読込に切り替えました。');
+            return;
+          }
+          handleOpenError(err);
+        });
+      }, function(err) {
+        if (err && (err.name === 'SecurityError' || err.name === 'NotAllowedError' || err.name === 'InvalidStateError' || err.name === 'TypeError' || err.name === 'NotSupportedError')) {
+          openFallbackFile('フォルダ読込できないため、JSONファイル読込に切り替えました。');
+          return;
+        }
+        handleOpenError(err);
+      });
+      return;
+    }
+
+    openDataByFileInput(function(data) {
+      handleLoadedData(data, 'データを読み込みました（' + LOCAL_DATA_FILE_NAME + '）。');
+    }, handleOpenError);
   };
 
 
