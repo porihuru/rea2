@@ -680,7 +680,11 @@ function readBlobAsTextCompat(blob, onSuccess, onError) {
   var toText       = document.getElementById('toText');
   var vendorText   = document.getElementById('vendorText');
   var billDate     = document.getElementById('billDate');
+  var debugLogBody = document.getElementById('debugLogBody');
+  var btnCopyLog   = document.getElementById('btnCopyLog');
+  var btnClearLog  = document.getElementById('btnClearLog');
   var LOCAL_DATA_FILE_NAME = 'data.json';
+  var DEBUG_LOG_LIMIT = 400;
 
   if (!ta || !btnClear || !btnSaveLocal || !btnOpenLocal || !btnCopyAll || !btnPrint || !bulkSpecText || !btnBulkSpec || !toText || !vendorText || !billDate) {
     if (window.console && console.error) {
@@ -689,11 +693,121 @@ function readBlobAsTextCompat(blob, onSuccess, onError) {
     return;
   }
 
+  function formatDebugLogTime(date) {
+    return [
+      zeroPad2(date.getHours()),
+      zeroPad2(date.getMinutes()),
+      zeroPad2(date.getSeconds())
+    ].join(':') + '.' + ('00' + date.getMilliseconds()).slice(-3);
+  }
+
+  function summarizeDebugDetail(detail) {
+    if (detail === null || detail === undefined || detail === '') {
+      return '';
+    }
+    if (typeof detail === 'string') {
+      return detail;
+    }
+    try {
+      return JSON.stringify(detail);
+    } catch (e) {
+      return String(detail);
+    }
+  }
+
+  function describeError(err) {
+    if (!err) return 'unknown';
+    if (typeof err === 'string') return err;
+    var name = err.name || 'Error';
+    var message = err.message || '';
+    return message ? (name + ': ' + message) : name;
+  }
+
+  function appendDebugLog(level, scope, message, detail) {
+    var line = '[' + formatDebugLogTime(new Date()) + '] [' + level + '] [' + scope + '] ' + message;
+    var detailText = summarizeDebugDetail(detail);
+    var entry;
+
+    if (detailText) {
+      line += ' | ' + detailText;
+    }
+
+    if (!debugLogBody) {
+      if (window.console && console.log) {
+        console.log(line);
+      }
+      return;
+    }
+
+    if (debugLogBody.textContent === 'まだログはありません。') {
+      debugLogBody.innerHTML = '';
+    }
+
+    entry = document.createElement('div');
+    entry.className = 'debug-log-entry debug-log-' + String(level || 'info').toLowerCase();
+    entry.textContent = line;
+    debugLogBody.appendChild(entry);
+
+    while (debugLogBody.childNodes.length > DEBUG_LOG_LIMIT) {
+      debugLogBody.removeChild(debugLogBody.firstChild);
+    }
+
+    debugLogBody.scrollTop = debugLogBody.scrollHeight;
+  }
+
+  function logInfo(scope, message, detail) {
+    appendDebugLog('info', scope, message, detail);
+  }
+
+  function logWarn(scope, message, detail) {
+    appendDebugLog('warn', scope, message, detail);
+  }
+
+  function logError(scope, message, detail) {
+    appendDebugLog('error', scope, message, detail);
+  }
+
+  function getDebugLogText() {
+    if (!debugLogBody) {
+      return '';
+    }
+    return (debugLogBody.textContent || '').replace(/^\s+|\s+$/g, '');
+  }
+
+  if (btnCopyLog) {
+    btnCopyLog.onclick = function() {
+      var logText = getDebugLogText();
+      if (!logText || logText === 'まだログはありません。') {
+        setStatusMessage('コピーできるログがありません。');
+        logWarn('log', 'ログコピー対象がありません。');
+        return;
+      }
+      copyTextToClipboard(logText, '動作ログ');
+      logInfo('log', 'ログをクリップボードへコピーしました。', { length: logText.length });
+    };
+  }
+
+  if (btnClearLog) {
+    btnClearLog.onclick = function() {
+      if (debugLogBody) {
+        debugLogBody.innerHTML = '';
+      }
+      logInfo('log', 'ログをクリアしました。');
+    };
+  }
+
+  logInfo('init', 'UI初期化を開始しました。', {
+    version: VERSION_TEXT,
+    protocol: window.location ? window.location.protocol : '',
+    readyState: document.readyState
+  });
+
   function setStatusMessage(msg) {
     var msgSpan = document.getElementById('copyMsg');
     if (msgSpan) {
       msgSpan.innerHTML = msg || '';
     }
+    logInfo('status', 'ステータスメッセージを更新しました。', msg || '');
   }
 
   function isFileProtocolPage() {
@@ -711,15 +825,19 @@ function readBlobAsTextCompat(blob, onSuccess, onError) {
   function saveDataByDownload(jsonText) {
     var fileName = buildSaveFileName();
     var blob = new Blob([jsonText], { type: 'application/json' });
+    logInfo('save', 'ダウンロード保存を開始します。', { fileName: fileName, size: jsonText.length });
     if (window.navigator && typeof window.navigator.msSaveOrOpenBlob === 'function') {
+      logInfo('save', 'msSaveOrOpenBlob を使用します。', fileName);
       window.navigator.msSaveOrOpenBlob(blob, fileName);
       return;
     }
     if (window.navigator && typeof window.navigator.msSaveBlob === 'function') {
+      logInfo('save', 'msSaveBlob を使用します。', fileName);
       window.navigator.msSaveBlob(blob, fileName);
       return;
     }
     if (!window.URL || typeof window.URL.createObjectURL !== 'function') {
+      logError('save', 'Blob URL が利用できないため保存できません。');
       throw { name: 'NotSupportedError' };
     }
     var url = URL.createObjectURL(blob);
@@ -730,6 +848,7 @@ function readBlobAsTextCompat(blob, onSuccess, onError) {
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
+    logInfo('save', 'ダウンロード保存を実行しました。', fileName);
   }
 
   function sanitizeFileNamePart(text) {
@@ -792,61 +911,82 @@ function readBlobAsTextCompat(blob, onSuccess, onError) {
     var input = document.createElement('input');
     input.type = 'file';
     input.accept = '.json,application/json';
+    logInfo('open', 'input[type=file] による読込を開始します。');
     input.onchange = function() {
       var file = input.files && input.files[0] ? input.files[0] : null;
       if (!file) {
+        logWarn('open', 'ファイルが選択されませんでした。');
         onError({ name: 'AbortError' });
         return;
       }
+      logInfo('open', 'ファイルが選択されました。', { fileName: file.name || '', size: file.size || 0 });
       readBlobAsTextWithFileReader(file, function(text) {
         try {
+          logInfo('open', 'ファイル内容の読込に成功しました。', { fileName: file.name || '', textLength: text.length });
           onSuccess(JSON.parse(text));
         } catch (e) {
+          logError('open', 'JSON解析に失敗しました。', { fileName: file.name || '', error: describeError(e) });
           onError({ name: 'SyntaxError' });
         }
-      }, onError);
+      }, function(err) {
+        logError('open', 'ファイル読込に失敗しました。', describeError(err));
+        onError(err);
+      });
     };
     input.click();
   }
 
   function pickDirectoryHandle(mode, onSuccess, onError) {
     if (!canUseDirectoryPicker()) {
+      logWarn('directory', 'Directory Picker が利用できません。', { mode: mode || 'readwrite' });
       onError({ name: 'NotSupportedError' });
       return;
     }
 
     try {
+      logInfo('directory', 'フォルダ選択を要求します。', { mode: mode || 'readwrite' });
       window.showDirectoryPicker({
         id: 'ledger-local-data',
         mode: mode || 'readwrite',
         startIn: 'documents'
       }).then(function(handle) {
+        logInfo('directory', 'フォルダが選択されました。', { mode: mode || 'readwrite' });
         onSuccess(handle);
       }, function(err) {
         if (err && err.name === 'TypeError') {
+          logWarn('directory', 'オプション付き showDirectoryPicker に失敗したため再試行します。', describeError(err));
           try {
             window.showDirectoryPicker().then(function(handle) {
+              logInfo('directory', 'フォルダが選択されました。', { mode: mode || 'readwrite', fallback: true });
               onSuccess(handle);
-            }, onError);
+            }, function(fallbackErr) {
+              logError('directory', 'フォルダ選択に失敗しました。', describeError(fallbackErr));
+              onError(fallbackErr);
+            });
           } catch (fallbackError) {
+            logError('directory', 'フォルダ選択の再試行に失敗しました。', describeError(fallbackError));
             onError(fallbackError);
           }
           return;
         }
+        logError('directory', 'フォルダ選択に失敗しました。', describeError(err));
         onError(err);
       });
     } catch (err) {
+      logError('directory', 'showDirectoryPicker 呼び出しに失敗しました。', describeError(err));
       onError(err);
     }
   }
 
   function openJsonDataWithPickerCompat(onSuccess, onError) {
     if (!canUseOpenFilePicker()) {
+      logWarn('open', 'Open File Picker が利用できないため file input に切り替えます。');
       openDataByFileInput(onSuccess, onError);
       return;
     }
 
     try {
+      logInfo('open', 'Open File Picker による読込を開始します。');
       window.showOpenFilePicker({
         id: 'ledger-local-open',
         multiple: false,
@@ -860,56 +1000,78 @@ function readBlobAsTextCompat(blob, onSuccess, onError) {
       }).then(function(fileHandles) {
         var fileHandle = fileHandles && fileHandles[0] ? fileHandles[0] : null;
         if (!fileHandle) {
+          logWarn('open', 'ファイルハンドルが取得できませんでした。');
           onError({ name: 'AbortError' });
           return;
         }
         fileHandle.getFile().then(function(file) {
+          logInfo('open', 'ファイルハンドルからファイルを取得しました。', { fileName: file.name || '', size: file.size || 0 });
           readBlobAsTextCompat(file, function(text) {
             try {
+              logInfo('open', 'ファイル内容の読込に成功しました。', { fileName: file.name || '', textLength: text.length });
               onSuccess(JSON.parse(text));
             } catch (e) {
+              logError('open', 'JSON解析に失敗しました。', { fileName: file.name || '', error: describeError(e) });
               onError({ name: 'SyntaxError' });
             }
-          }, onError);
-        }, onError);
+          }, function(err) {
+            logError('open', 'ファイル内容の読込に失敗しました。', describeError(err));
+            onError(err);
+          });
+        }, function(err) {
+          logError('open', 'ファイル取得に失敗しました。', describeError(err));
+          onError(err);
+        });
       }, function(err) {
         if (err && err.name === 'TypeError') {
+          logWarn('open', 'オプション付き showOpenFilePicker に失敗したため再試行します。', describeError(err));
           try {
             window.showOpenFilePicker().then(function(fallbackHandles) {
               var fallbackHandle = fallbackHandles && fallbackHandles[0] ? fallbackHandles[0] : null;
               if (!fallbackHandle) {
+                logWarn('open', '再試行でもファイルハンドルが取得できませんでした。');
                 onError({ name: 'AbortError' });
                 return;
               }
               fallbackHandle.getFile().then(function(fallbackFile) {
+                logInfo('open', '再試行でファイルを取得しました。', { fileName: fallbackFile.name || '', size: fallbackFile.size || 0 });
                 readBlobAsTextCompat(fallbackFile, function(fallbackText) {
                   try {
+                    logInfo('open', '再試行でファイル内容の読込に成功しました。', { fileName: fallbackFile.name || '', textLength: fallbackText.length });
                     onSuccess(JSON.parse(fallbackText));
                   } catch (e) {
+                    logError('open', '再試行でJSON解析に失敗しました。', { fileName: fallbackFile.name || '', error: describeError(e) });
                     onError({ name: 'SyntaxError' });
                   }
                 }, function() {
+                  logWarn('open', '再試行でのファイル読込に失敗したため file input に切り替えます。');
                   openDataByFileInput(onSuccess, onError);
                 });
               }, function() {
+                logWarn('open', '再試行でのファイル取得に失敗したため file input に切り替えます。');
                 openDataByFileInput(onSuccess, onError);
               });
             }, function() {
+              logWarn('open', '再試行のファイル選択に失敗したため file input に切り替えます。');
               openDataByFileInput(onSuccess, onError);
             });
           } catch (fallbackError) {
+            logError('open', 'showOpenFilePicker の再試行に失敗しました。', describeError(fallbackError));
             openDataByFileInput(onSuccess, onError);
           }
           return;
         }
+        logError('open', 'ファイル選択に失敗しました。', describeError(err));
         onError(err);
       });
     } catch (err) {
+      logError('open', 'showOpenFilePicker 呼び出しに失敗しました。', describeError(err));
       onError(err);
     }
   }
 
   function handleOpenError(err) {
+    logError('open', '読込エラーを処理します。', describeError(err));
     if (err && err.name === 'AbortError') {
       setStatusMessage('読み込みをキャンセルしました。');
       return;
@@ -956,6 +1118,11 @@ function readBlobAsTextCompat(blob, onSuccess, onError) {
   }
 
   function applyLocalSaveData(data) {
+    logInfo('open', '保存データを画面へ反映します。', {
+      rows: data && data.rows ? data.rows.length : 0,
+      hasSourceText: !!(data && data.srcText),
+      savedAt: data && data.savedAt ? data.savedAt : ''
+    });
     ta.value = data && data.srcText ? data.srcText : '';
     bulkSpecText.value = data && data.bulkSpecText ? data.bulkSpecText : '規格表のとおり';
     toText.value = data && data.toText ? data.toText : '';
@@ -963,14 +1130,18 @@ function readBlobAsTextCompat(blob, onSuccess, onError) {
     billDate.value = data && data.billDate ? data.billDate : '';
 
     if (data && data.rows && data.rows.length) {
+      logInfo('open', '保存済み明細をそのまま描画します。', { rows: data.rows.length });
       renderTable(data.rows, data.summary || { base:'',tax:'',total:'',calcBaseStr:'',baseCheckMark:'' });
       return;
     }
 
     if (ta.value) {
-      safeDoParse();
+      logInfo('open', '明細が無いため元テキストを再解析します。');
+      safeDoParse('applyLocalSaveData', true);
       return;
     }
+
+    logWarn('open', '表示対象データが無いため画面を初期表示へ戻します。');
 
     document.getElementById('result').innerHTML   = '';
     document.getElementById('summary').innerHTML  = '';
@@ -986,6 +1157,10 @@ function readBlobAsTextCompat(blob, onSuccess, onError) {
 
   function doParse() {
     var text = ta.value || '';
+    if (!text.replace(/\s+/g, '')) {
+      renderTable([], { base:'',tax:'',total:'',calcBaseStr:'',baseCheckMark:'' });
+      return { rows: [], summary: { base:'',tax:'',total:'',calcBaseStr:'',baseCheckMark:'' } };
+    }
     // ledger_paste_parser.js のパーサを利用
     if (typeof parseLedgerText !== 'function') {
       throw new Error('parseLedgerText is not available');
@@ -994,57 +1169,75 @@ function readBlobAsTextCompat(blob, onSuccess, onError) {
     var rows    = parsed && parsed.rows ? parsed.rows : [];
     var summary = parsed && parsed.summary ? parsed.summary : { base:'',tax:'',total:'',calcBaseStr:'',baseCheckMark:'' };
     renderTable(rows, summary);
+    return { rows: rows, summary: summary };
   }
 
-  function safeDoParse() {
+  function safeDoParse(source, shouldLogSuccess) {
     try {
-      doParse();
+      var parsed = doParse();
+      if (shouldLogSuccess) {
+        logInfo('parse', '解析が完了しました。', {
+          source: source || 'unknown',
+          rows: parsed && parsed.rows ? parsed.rows.length : 0,
+          textLength: ta && ta.value ? ta.value.length : 0
+        });
+      }
     } catch (err) {
       setStatusMessage('貼り付け解析に失敗しました。テキスト形式を確認してください。');
+      logError('parse', '解析に失敗しました。', {
+        source: source || 'unknown',
+        error: describeError(err)
+      });
       if (window.console && console.error) {
         console.error(err);
       }
     }
   }
 
-  function scheduleParseWithRetry() {
-    setTimeout(safeDoParse, 0);
-    setTimeout(safeDoParse, 60);
+  function scheduleParseWithRetry(source) {
+    logInfo('parse', '解析を予約しました。', { source: source || 'unknown' });
+    setTimeout(function() {
+      safeDoParse((source || 'unknown') + ':retry0', true);
+    }, 0);
+    setTimeout(function() {
+      safeDoParse((source || 'unknown') + ':retry60', true);
+    }, 60);
   }
 
   // 貼り付け時に自動解析
   if (ta.addEventListener) {
     ta.addEventListener('paste', function() {
-      scheduleParseWithRetry();
+      scheduleParseWithRetry('paste');
     }, false);
     ta.addEventListener('input', function() {
-      safeDoParse();
+      safeDoParse('input', false);
     }, false);
     ta.addEventListener('change', function() {
-      safeDoParse();
+      safeDoParse('change', true);
     }, false);
     ta.addEventListener('keyup', function() {
-      safeDoParse();
+      safeDoParse('keyup', false);
     }, false);
     ta.addEventListener('drop', function() {
-      scheduleParseWithRetry();
+      scheduleParseWithRetry('drop');
     }, false);
   } else {
     ta.onpaste = function() {
-      scheduleParseWithRetry();
+      scheduleParseWithRetry('paste');
     };
     ta.oninput = function() {
-      safeDoParse();
+      safeDoParse('input', false);
     };
     ta.onkeyup = function() {
-      safeDoParse();
+      safeDoParse('keyup', false);
     };
     ta.onchange = function() {
-      safeDoParse();
+      safeDoParse('change', true);
     };
   }
 
   btnClear.onclick = function() {
+  logInfo('ui', 'クリアボタンが押されました。');
   ta.value = '';
   document.getElementById('result').innerHTML   = '';
   document.getElementById('summary').innerHTML  = '';
@@ -1064,6 +1257,7 @@ function readBlobAsTextCompat(blob, onSuccess, onError) {
   currentRows     = [];
   originalSummary = null;
   lastAllDataText = '';
+  logInfo('ui', '画面の解析結果をクリアしました。');
 };
 
   btnSaveLocal.onclick = function() {
@@ -1071,80 +1265,112 @@ function readBlobAsTextCompat(blob, onSuccess, onError) {
     var jsonText = JSON.stringify(data, null, 2);
     var fileName = buildSaveFileName();
 
+    logInfo('save', '保存ボタンが押されました。', {
+      fileName: fileName,
+      rows: data && data.rows ? data.rows.length : 0,
+      textLength: jsonText.length
+    });
+
     function fallbackSave(messagePrefix) {
       try {
+        logWarn('save', '通常のフォルダ保存からダウンロード保存へ切り替えます。', { fileName: fileName, reason: messagePrefix });
         saveDataByDownload(jsonText);
         setStatusMessage(messagePrefix + '（' + fileName + '）。');
       } catch (e) {
+        logError('save', 'ダウンロード保存にも失敗しました。', describeError(e));
         setStatusMessage('保存に失敗しました。');
       }
     }
 
     if (isFileProtocolPage() || !canUseDirectoryPicker()) {
+      logWarn('save', 'フォルダ保存が使えない環境のためダウンロード保存を実行します。', {
+        protocol: window.location ? window.location.protocol : '',
+        canUseDirectoryPicker: canUseDirectoryPicker()
+      });
       fallbackSave('JSONファイルとして保存しました');
       return;
     }
 
     pickDirectoryHandle('readwrite', function(dirHandle) {
       dirHandle.getFileHandle(fileName, { create: true }).then(function(fileHandle) {
+        logInfo('save', '保存ファイルハンドルを取得しました。', fileName);
         fileHandle.createWritable().then(function(writable) {
+          logInfo('save', '書き込みストリームを開きました。', fileName);
           writable.write(jsonText).then(function() {
+            logInfo('save', 'JSON書き込みに成功しました。', { fileName: fileName, size: jsonText.length });
             writable.close().then(function() {
+              logInfo('save', '書き込みストリームを閉じました。', fileName);
               setStatusMessage('データを保存しました（' + fileName + '）。');
             }, function(err) {
               if (err && err.name === 'AbortError') {
+                logWarn('save', '保存のクローズ処理がキャンセルされました。', describeError(err));
                 setStatusMessage('保存をキャンセルしました。');
                 return;
               }
+              logError('save', '書き込みストリームのクローズに失敗しました。', describeError(err));
               fallbackSave('フォルダ保存できないため、JSONファイル保存に切り替えました');
             });
           }, function(err) {
             if (err && err.name === 'AbortError') {
+              logWarn('save', 'JSON書き込みがキャンセルされました。', describeError(err));
               setStatusMessage('保存をキャンセルしました。');
               return;
             }
+            logError('save', 'JSON書き込みに失敗しました。', describeError(err));
             fallbackSave('フォルダ保存できないため、JSONファイル保存に切り替えました');
           });
         }, function(err) {
           if (err && err.name === 'AbortError') {
+            logWarn('save', '書き込みストリーム作成がキャンセルされました。', describeError(err));
             setStatusMessage('保存をキャンセルしました。');
             return;
           }
+          logError('save', '書き込みストリーム作成に失敗しました。', describeError(err));
           fallbackSave('フォルダ保存できないため、JSONファイル保存に切り替えました');
         });
       }, function(err) {
         if (err && err.name === 'AbortError') {
+          logWarn('save', '保存先ファイルの取得がキャンセルされました。', describeError(err));
           setStatusMessage('保存をキャンセルしました。');
           return;
         }
+        logError('save', '保存先ファイルの取得に失敗しました。', describeError(err));
         fallbackSave('フォルダ保存できないため、JSONファイル保存に切り替えました');
       });
     }, function(err) {
       if (err && err.name === 'AbortError') {
+        logWarn('save', '保存先フォルダの選択がキャンセルされました。', describeError(err));
         setStatusMessage('保存をキャンセルしました。');
         return;
       }
+      logError('save', '保存先フォルダの選択に失敗しました。', describeError(err));
       fallbackSave('フォルダ保存できないため、JSONファイル保存に切り替えました');
     });
   };
 
   btnOpenLocal.onclick = function() {
+    logInfo('open', '読込ボタンが押されました。');
+
     function handleLoadedData(data, loadedLabel) {
       if (!data || data.format !== 'ledger-local-save-v1') {
+        logError('open', '読み込んだJSONの形式が不正です。', data && data.format ? data.format : 'format missing');
         setStatusMessage('読み込んだデータ形式が不正です。');
         return;
       }
+      logInfo('open', '保存データ形式の確認に成功しました。', { format: data.format, savedAt: data.savedAt || '' });
       applyLocalSaveData(data);
       setStatusMessage(loadedLabel);
     }
 
     function openFallbackFile(reasonLabel) {
+      logWarn('open', 'フォールバックの file input 読込に切り替えます。', reasonLabel);
       openDataByFileInput(function(fallbackLoaded) {
         handleLoadedData(fallbackLoaded, reasonLabel);
       }, handleOpenError);
     }
 
     if (isFileProtocolPage()) {
+      logInfo('open', 'file: プロトコルのため file input 読込を使用します。');
       openDataByFileInput(function(data) {
         handleLoadedData(data, 'データを読み込みました（' + LOCAL_DATA_FILE_NAME + '）。');
       }, handleOpenError);
@@ -1152,10 +1378,12 @@ function readBlobAsTextCompat(blob, onSuccess, onError) {
     }
 
     if (canUseOpenFilePicker()) {
+      logInfo('open', 'Open File Picker での読込を試行します。');
       openJsonDataWithPickerCompat(function(data) {
         handleLoadedData(data, 'データを読み込みました（' + LOCAL_DATA_FILE_NAME + '）。');
       }, function(err) {
         if (err && (err.name === 'SecurityError' || err.name === 'NotAllowedError' || err.name === 'InvalidStateError' || err.name === 'TypeError' || err.name === 'NotSupportedError')) {
+          logWarn('open', 'Open File Picker が利用できなかったため file input へ切り替えます。', describeError(err));
           openFallbackFile('フォルダ読込できないため、JSONファイル読込に切り替えました。');
           return;
         }
@@ -1165,17 +1393,23 @@ function readBlobAsTextCompat(blob, onSuccess, onError) {
     }
 
     if (canUseDirectoryPicker()) {
+      logInfo('open', 'Directory Picker で data.json の読込を試行します。');
       pickDirectoryHandle('read', function(dirHandle) {
         dirHandle.getFileHandle(LOCAL_DATA_FILE_NAME).then(function(dirFileHandle) {
+          logInfo('open', 'フォルダ内の読込対象ファイルを取得しました。', LOCAL_DATA_FILE_NAME);
           dirFileHandle.getFile().then(function(dirFile) {
+            logInfo('open', 'フォルダ内のファイル取得に成功しました。', { fileName: dirFile.name || LOCAL_DATA_FILE_NAME, size: dirFile.size || 0 });
             readBlobAsTextCompat(dirFile, function(dirText) {
               try {
+                logInfo('open', 'フォルダ内ファイルの読込に成功しました。', { fileName: dirFile.name || LOCAL_DATA_FILE_NAME, textLength: dirText.length });
                 handleLoadedData(JSON.parse(dirText), 'データを読み込みました（' + LOCAL_DATA_FILE_NAME + '）。');
               } catch (e) {
+                logError('open', 'フォルダ内ファイルのJSON解析に失敗しました。', { fileName: dirFile.name || LOCAL_DATA_FILE_NAME, error: describeError(e) });
                 handleOpenError({ name: 'SyntaxError' });
               }
             }, function(err) {
               if (err && (err.name === 'SecurityError' || err.name === 'NotAllowedError' || err.name === 'InvalidStateError' || err.name === 'TypeError' || err.name === 'NotSupportedError' || err.name === 'ReadError')) {
+                logWarn('open', 'フォルダ内ファイルの読込に失敗したため file input に切り替えます。', describeError(err));
                 openFallbackFile('フォルダ読込できないため、JSONファイル読込に切り替えました。');
                 return;
               }
@@ -1183,6 +1417,7 @@ function readBlobAsTextCompat(blob, onSuccess, onError) {
             });
           }, function(err) {
             if (err && (err.name === 'SecurityError' || err.name === 'NotAllowedError' || err.name === 'InvalidStateError' || err.name === 'TypeError' || err.name === 'NotSupportedError')) {
+              logWarn('open', 'フォルダ内ファイルの取得に失敗したため file input に切り替えます。', describeError(err));
               openFallbackFile('フォルダ読込できないため、JSONファイル読込に切り替えました。');
               return;
             }
@@ -1190,6 +1425,7 @@ function readBlobAsTextCompat(blob, onSuccess, onError) {
           });
         }, function(err) {
           if (err && (err.name === 'SecurityError' || err.name === 'NotAllowedError' || err.name === 'InvalidStateError' || err.name === 'TypeError' || err.name === 'NotSupportedError')) {
+            logWarn('open', 'フォルダ内の data.json 取得に失敗したため file input に切り替えます。', describeError(err));
             openFallbackFile('フォルダ読込できないため、JSONファイル読込に切り替えました。');
             return;
           }
@@ -1197,6 +1433,7 @@ function readBlobAsTextCompat(blob, onSuccess, onError) {
         });
       }, function(err) {
         if (err && (err.name === 'SecurityError' || err.name === 'NotAllowedError' || err.name === 'InvalidStateError' || err.name === 'TypeError' || err.name === 'NotSupportedError')) {
+          logWarn('open', 'フォルダ選択に失敗したため file input に切り替えます。', describeError(err));
           openFallbackFile('フォルダ読込できないため、JSONファイル読込に切り替えました。');
           return;
         }
@@ -1206,6 +1443,7 @@ function readBlobAsTextCompat(blob, onSuccess, onError) {
     }
 
     openDataByFileInput(function(data) {
+      logInfo('open', '最終フォールバックとして file input 読込を実行します。');
       handleLoadedData(data, 'データを読み込みました（' + LOCAL_DATA_FILE_NAME + '）。');
     }, handleOpenError);
   };
@@ -1322,7 +1560,10 @@ function readBlobAsTextCompat(blob, onSuccess, onError) {
     var mm = zeroPad2(threeDaysLater.getMonth() + 1);
     var dd = zeroPad2(threeDaysLater.getDate());
     billDate.value = yyyy + '-' + mm + '-' + dd;
+    logInfo('init', '請求日初期値を設定しました。', billDate.value);
   }
+
+  logInfo('init', 'UI初期化が完了しました。');
 
   }
 

@@ -100,6 +100,61 @@
       padding: 2px 4px;
       box-sizing: border-box;
     }
+    #debugLogPanel {
+      margin-top: 12px;
+      border: 1px solid #999;
+      background: #fbfbfb;
+    }
+    #debugLogHeader {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 6px 8px;
+      border-bottom: 1px solid #ddd;
+      background: #f0f0f0;
+    }
+    #debugLogHeader strong {
+      font-size: 12px;
+    }
+    #debugLogHeader .small {
+      margin-left: 8px;
+    }
+    #debugLogActions {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+    }
+    #btnClearLog {
+      margin-right: 0;
+    }
+    #debugLogBody {
+      max-height: 240px;
+      overflow-y: auto;
+      padding: 6px 8px;
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 11px;
+      line-height: 1.45;
+      white-space: pre-wrap;
+      background: #fff;
+    }
+    .debug-log-entry {
+      padding: 2px 0;
+      border-bottom: 1px dotted #eee;
+    }
+    .debug-log-entry:last-child {
+      border-bottom: 0;
+    }
+    .debug-log-info {
+      color: #1f2937;
+    }
+    .debug-log-warn {
+      color: #92400e;
+      background: #fffbeb;
+    }
+    .debug-log-error {
+      color: #991b1b;
+      background: #fef2f2;
+    }
   </style>
 </head>
 <body>
@@ -170,6 +225,20 @@
   <div id="summary" class="small" style="margin-top: 6px;"></div>
   <div id="result"></div>
   <div id="sumBox" class="small"></div>
+
+  <div id="debugLogPanel">
+    <div id="debugLogHeader">
+      <div>
+        <strong>動作ログ</strong>
+        <span class="small">初期化、解析、保存、読込の進行状況を表示します。</span>
+      </div>
+      <div id="debugLogActions">
+        <button id="btnCopyLog" type="button">ログコピー</button>
+        <button id="btnClearLog" type="button">ログクリア</button>
+      </div>
+    </div>
+    <div id="debugLogBody" aria-live="polite">まだログはありません。</div>
+  </div>
 
   <!-- 解析用パーサ -->
   <script src="casks/ledger_paste_parser.js"></script>
