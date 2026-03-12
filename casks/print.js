@@ -323,9 +323,9 @@
             "</div>";
         }
 
-        // 「下記のとおりご請求申し上げます。（低減税率対象）」行
+        // 「下記のとおりご請求申し上げます。（軽減税率対象）」行
         html +=
-          '<div class="message-line">下記のとおりご請求申し上げます。（低減税率対象）</div>';
+          '<div class="message-line">下記のとおりご請求申し上げます。（軽減税率対象）</div>';
 
         // 宛先枠
         html += '<div class="box atena" style="margin-bottom:4px;">';
